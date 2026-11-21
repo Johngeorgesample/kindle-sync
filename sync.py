@@ -1,20 +1,25 @@
 import email
 import email.policy
 import html
+import io
 import imaplib
 import os
 import re
 import smtplib
 from urllib.parse import parse_qs, urlsplit
+from urllib.request import Request, urlopen
 from email.message import EmailMessage
 
 import trafilatura
+from ebooklib import epub
 
 USER = os.environ["GMAIL_USER"]
 PASSWORD = os.environ["GMAIL_APP_PASSWORD"]
 KINDLE = os.environ["KINDLE_EMAIL"]
 ALIAS = USER.replace("@", "+kindle@")
 SENT, FAILED = "kindle-sent", "kindle-failed"
+# Kindle EPUB covers; webp/avif get dropped rather than risk a failed conversion
+COVER_TYPES = {"image/jpeg": "jpg", "image/png": "png", "image/gif": "gif"}
 
 
 def queued(imap):
@@ -48,23 +53,52 @@ def article(url):
         return None
     body = re.sub(r"</?(html|body)>", "", body)
     meta = trafilatura.extract_metadata(page)
-    return (meta and meta.title) or url, body
+    return (meta and meta.title) or url, body, meta and meta.image
 
 
-def kindle_email(title, body):
+def cover(url):
+    try:
+        with urlopen(Request(url, headers={"User-Agent": "Mozilla/5.0"}), timeout=15) as r:
+            ext = COVER_TYPES.get(r.headers.get_content_type())
+            return ext and (f"cover.{ext}", r.read())
+    except (OSError, ValueError):
+        return None
+
+
+def to_epub(title, body, image):
+    book = epub.EpubBook()
+    book.set_identifier(title)
+    book.set_title(title)
+    book.set_language("en")
+    hero = f'<img src="{image[0]}" alt=""/>' if image else ""
+    page = epub.EpubHtml(title=title, file_name="article.xhtml", content=f"{hero}<h1>{html.escape(title)}</h1>{body}")
+    book.add_item(page)
+    book.add_item(epub.EpubNav())
+    # ebooklib's generated cover page and an empty toc both crash its writer
+    book.toc, book.spine = [page], [page]
+    if image:
+        book.set_cover(*image, create_page=False)
+    out = io.BytesIO()
+    # write_epub swallows errors and returns a truncated book, so use the writer directly
+    writer = epub.EpubWriter(out, book, {})
+    writer.process()
+    writer.write()
+    return out.getvalue()
+
+
+def kindle_email(title, book):
     msg = EmailMessage()
     msg["From"], msg["To"], msg["Subject"] = USER, KINDLE, title
-    page = f"<html><head><meta charset='utf-8'><title>{html.escape(title)}</title></head><body><h1>{html.escape(title)}</h1>{body}</body></html>"
-    # Kindle shows the attachment's filename as the document title
     filename = re.sub(r"[^\w\- ]", "", title)[:80].strip() or "article"
-    msg.add_attachment(page.encode(), maintype="text", subtype="html", filename=f"{filename}.html")
+    msg.add_attachment(book, maintype="application", subtype="epub+zip", filename=f"{filename}.epub")
     return msg
 
 
 def deliver(smtp, url):
     found = article(url)
     if found:
-        smtp.send_message(kindle_email(*found))
+        title, body, image_url = found
+        smtp.send_message(kindle_email(title, to_epub(title, body, image_url and cover(image_url))))
     return bool(found)
 
 
