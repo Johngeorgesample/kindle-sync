@@ -2,6 +2,8 @@ import email
 import email.policy
 import html
 import io
+import itertools
+import json
 import imaplib
 import os
 import re
@@ -19,6 +21,10 @@ KINDLE = os.environ["KINDLE_EMAIL"]
 ALIAS = USER.replace("@", "+kindle@")
 SENT, FAILED = "kindle-sent", "kindle-failed"
 # Kindle EPUB covers; webp/avif get dropped rather than risk a failed conversion
+X_HOSTS = {"x.com", "www.x.com", "twitter.com", "www.twitter.com", "mobile.twitter.com"}
+X_LISTS = {"unordered-list-item": "ul", "ordered-list-item": "ol"}
+X_TAGS = {"header-one": "h2", "header-two": "h2", "header-three": "h3", "blockquote": "blockquote"}
+UA = {"User-Agent": "Mozilla/5.0"}
 COVER_TYPES = {"image/jpeg": "jpg", "image/png": "png", "image/gif": "gif"}
 
 
@@ -47,6 +53,8 @@ def unwrap(url):
 
 
 def article(url):
+    if urlsplit(url).netloc in X_HOSTS:
+        return x_post(url)
     page = trafilatura.fetch_url(url)
     body = page and trafilatura.extract(page, output_format="html", url=url)
     if not body:
@@ -56,9 +64,36 @@ def article(url):
     return (meta and meta.title) or url, body, meta and meta.image
 
 
+def x_post(url):
+    # X pages are JS-only; fxtwitter exposes posts and long-form Articles as JSON
+    status = re.search(r"/status/(\d+)", url)
+    try:
+        with urlopen(Request(f"https://api.fxtwitter.com/status/{status[1]}", headers=UA), timeout=15) as r:
+            tweet = json.load(r)["tweet"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    if tweet.get("article"):
+        a = tweet["article"]
+        image = (a.get("cover_media") or {}).get("media_info", {}).get("original_img_url")
+        return a["title"], x_blocks(a["content"]["blocks"]), image
+    return f"{tweet['author']['name']} on X", f"<p>{html.escape(tweet['text'])}</p>", None
+
+
+def x_blocks(blocks):
+    # ponytail: drops bold/italic/links and inline images; plain text is enough to read
+    parts = []
+    for kind, group in itertools.groupby(blocks, key=lambda b: b["type"]):
+        texts = [html.escape(b["text"]) for b in group if b["text"].strip()]
+        if kind in X_LISTS:
+            parts.append(f"<{X_LISTS[kind]}>{''.join(f'<li>{t}</li>' for t in texts)}</{X_LISTS[kind]}>")
+        else:
+            parts += [f"<{X_TAGS.get(kind, 'p')}>{t}</{X_TAGS.get(kind, 'p')}>" for t in texts]
+    return "".join(parts)
+
+
 def cover(url):
     try:
-        with urlopen(Request(url, headers={"User-Agent": "Mozilla/5.0"}), timeout=15) as r:
+        with urlopen(Request(url, headers=UA), timeout=15) as r:
             ext = COVER_TYPES.get(r.headers.get_content_type())
             return ext and (f"cover.{ext}", r.read())
     except (OSError, ValueError):
