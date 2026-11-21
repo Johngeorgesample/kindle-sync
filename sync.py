@@ -5,6 +5,7 @@ import imaplib
 import os
 import re
 import smtplib
+from urllib.parse import parse_qs, urlsplit
 from email.message import EmailMessage
 
 import trafilatura
@@ -29,7 +30,15 @@ def urls_in(imap, num):
     _, data = imap.fetch(num, "(BODY.PEEK[])")
     body = email.message_from_bytes(data[0][1], policy=email.policy.default).get_body(("plain", "html"))
     urls = re.findall(r"https?://[^\s<>\"']+", body.get_content())
-    return list(dict.fromkeys(u.rstrip(").,") for u in urls))
+    return list(dict.fromkeys(unwrap(u.rstrip(").,")) for u in urls))
+
+
+def unwrap(url):
+    # Gmail (incl. its API connector) rewrites links as google.com/url?q=<real url>
+    parts = urlsplit(url)
+    if parts.netloc.endswith("google.com") and parts.path == "/url":
+        return parse_qs(parts.query).get("q", [url])[0]
+    return url
 
 
 def article(url):
