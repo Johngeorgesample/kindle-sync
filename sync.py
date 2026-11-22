@@ -31,7 +31,7 @@ COVER_TYPES = {"image/jpeg": "jpg", "image/png": "png", "image/gif": "gif"}
 def queued(imap):
     # ponytail: English-locale mailbox name; other Gmail locales name All Mail differently
     imap.select('"[Gmail]/All Mail"')
-    query = f"to:{ALIAS} -label:{SENT} -label:{FAILED}"
+    query = f"from:{USER} to:{ALIAS} -label:{SENT} -label:{FAILED}"
     _, data = imap.search(None, "X-GM-RAW", f'"{query}"')
     return data[0].split()
 
