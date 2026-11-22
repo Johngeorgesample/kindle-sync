@@ -8,7 +8,7 @@ Links: $ARGUMENTS
 
 1. Pull every http(s) URL out of the links above (any separator: spaces, newlines, commas). If none, ask for them.
 2. Send ONE email with the Gmail connector's `send_message` tool:
-   - to: `johngeorgesample+kindle@gmail.com`
+   - to: the user's Gmail address with `+kindle` added before the @ (`you@gmail.com` → `you+kindle@gmail.com`)
    - subject: `kindle`
    - body: the URLs, one per line
 3. Kick off delivery now instead of waiting for the hourly cron:
