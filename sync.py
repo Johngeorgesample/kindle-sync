@@ -29,11 +29,16 @@ COVER_TYPES = {"image/jpeg": "jpg", "image/png": "png", "image/gif": "gif"}
 
 
 def queued(imap):
-    # ponytail: English-locale mailbox name; other Gmail locales name All Mail differently
-    imap.select('"[Gmail]/All Mail"')
+    imap.select(f'"{all_mail(imap)}"')
     query = f"from:{USER} to:{ALIAS} -label:{SENT} -label:{FAILED}"
     _, data = imap.search(None, "X-GM-RAW", f'"{query}"')
     return data[0].split()
+
+
+def all_mail(imap):
+    # Gmail localizes the All Mail name but always flags it \All (RFC 6154)
+    _, boxes = imap.list()
+    return next(re.search(rb'"([^"]+)"$', b)[1].decode() for b in boxes if rb"\All" in b)
 
 
 def urls_in(imap, num):
